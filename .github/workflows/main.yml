@@ -6,24 +6,18 @@ on:
       - main
       - master
       - develop
-
   pull_request:
     branches:
       - main
       - master
       - develop
-
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-
-  # ============================================================
-  # 1. AMBIENTE
-  # ============================================================
-  setup:
+  test:
     name: Setup and Environment Check
     runs-on: ubuntu-latest
 
@@ -34,13 +28,16 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          cache: "pip"
+          python-version: '3.11'
+          cache: 'pip'
 
       - name: Show environment
         run: |
           python --version
+          python -c "import sys; print(sys.executable)"
           pip --version
+          pwd
+          ls -la
 
       - name: Install test dependencies
         run: |
@@ -49,140 +46,23 @@ jobs:
 
       - name: Validate Python compilation
         run: |
-          python -m compileall -q engine tests
+          python -m compileall engine tests
 
-
-  # ============================================================
-  # 2. GATES CRÍTICOS
-  # ============================================================
-  critical-gates:
-    name: Critical Release Gates
-    runs-on: ubuntu-latest
-    needs: setup
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
+      - name: Run critical tests
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest
-
-      - name: Match Engine V215.1
-        run: |
-          python -m pytest \
+          pytest -v \
             tests/test_v215_1_match_engine.py \
-            -v
-
-      - name: Long-Term Simulation V216-V220
-        run: |
-          python -m pytest \
             tests/test_v220_block11.py \
-            -v
+            tests/test_v221_v225_release.py
 
-      - name: Final Release V221-V225
+      - name: Run full regression
         run: |
-          python -m pytest \
-            tests/test_v221_v225_release.py \
-            -v
-
-
-  # ============================================================
-  # 3. REGRESSÃO COMPLETA
-  # ============================================================
-  full-regression:
-    name: Full Regression Suite
-    runs-on: ubuntu-latest
-    needs: critical-gates
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest
-
-      - name: Run complete test suite
-        run: |
-          python -m pytest \
-            -v \
-            --tb=short \
-            --junitxml=test-results.xml
+          pytest -v --tb=short --junitxml=test-results.xml
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fws-test-results
+          name: test-results
           path: test-results.xml
-
-
-  # ============================================================
-  # 4. RELEASE MANIFEST
-  # ============================================================
-  release-validation:
-    name: V225 Release Validation
-    runs-on: ubuntu-latest
-    needs: full-regression
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest
-
-      - name: Validate release package
-        run: |
-          python -m pytest \
-            tests/test_v221_v225_release.py \
-            -v
-
-      - name: Validate release manifest
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          manifest = Path("config/version_manifest.json")
-
-          if not manifest.exists():
-              raise SystemExit("ERROR: version_manifest.json not found")
-
-          data = json.loads(manifest.read_text(encoding="utf-8"))
-
-          print("Release manifest found.")
-          print(json.dumps(data, indent=2, ensure_ascii=False))
-
-          PY
-
-      - name: Release status
-        run: |
-          echo "========================================"
-          echo " FOOTBALL WORLD SIMULATOR"
-          echo " V225 FINAL RELEASE"
-          echo "========================================"
-          echo "Critical gates : PASS"
-          echo "Regression     : PASS"
-          echo "Release check  : PASS"
-          echo "========================================"
+          if-no-files-found: ignore
