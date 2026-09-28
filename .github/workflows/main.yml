@@ -20,12 +20,83 @@ permissions:
 
 jobs:
   test:
-    name: Setup and Environment Check
+    name: V225 ZIP Validation
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Locate V225 ZIP
+        run: |
+          echo "Procurando pacote ZIP do Football World Simulator..."
+
+          ZIP_FILE=$(find . -maxdepth 2 -type f \
+            \( -name "Football_World_Simulator_V225_BLOCK12.zip" \
+            -o -name "Football_World_Simulator_V225_BLOCK12_GITHUB_UPLOAD.zip" \
+            \) \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERRO: ZIP V225 não encontrado."
+            echo "Arquivos encontrados:"
+            find . -maxdepth 2 -type f | sort
+            exit 1
+          fi
+
+          echo "ZIP encontrado:"
+          echo "$ZIP_FILE"
+
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract V225 ZIP
+        run: |
+          rm -rf _fws_v225
+          mkdir -p _fws_v225
+
+          echo "Extraindo:"
+          echo "$ZIP_FILE"
+
+          unzip -q "$ZIP_FILE" -d _fws_v225
+
+          echo "Conteúdo extraído:"
+          find _fws_v225 -maxdepth 2 -type d | sort | head -100
+
+      - name: Locate project root
+        run: |
+          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/_fws_v225" \
+            -name "pytest.ini" \
+            -type f \
+            -print -quit \
+            | xargs dirname)
+
+          if [ -z "$PROJECT_ROOT" ] || [ ! -f "$PROJECT_ROOT/pytest.ini" ]; then
+            echo "ERRO: raiz do projeto V225 não encontrada."
+            find "$GITHUB_WORKSPACE/_fws_v225" -maxdepth 4 -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "Raiz do projeto:"
+          echo "$PROJECT_ROOT"
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+      - name: Verify V225 structure
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          echo "Verificando estrutura V225..."
+
+          test -d engine
+          test -d tests
+          test -d config
+          test -f pytest.ini
+
+          test -f tests/test_v215_1_match_engine.py
+          test -f tests/test_v220_block11.py
+          test -f tests/test_v221_v225_release.py
+
+          echo "Estrutura V225 OK."
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -33,12 +104,11 @@ jobs:
           python-version: '3.11'
 
       - name: Show environment
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           python --version
-          python -c "import sys; print(sys.executable)"
           python -m pip --version
           pwd
-          ls -la
 
       - name: Install test dependencies
         run: |
@@ -46,10 +116,12 @@ jobs:
           python -m pip install pytest
 
       - name: Validate Python compilation
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           python -m compileall engine tests
 
       - name: Run critical tests
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           pytest -v \
             tests/test_v215_1_match_engine.py \
@@ -57,6 +129,7 @@ jobs:
             tests/test_v221_v225_release.py
 
       - name: Run full regression
+        working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           pytest -v --tb=short --junitxml=test-results.xml
 
@@ -64,14 +137,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
-          path: test-results.xml
+          name: fws-v225-test-results
+          path: ${{ env.PROJECT_ROOT }}/test-results.xml
           if-no-files-found: ignore
 
-      - name: Final release validation
+      - name: Final V225 validation
         run: |
           echo "=========================================="
           echo " FOOTBALL WORLD SIMULATOR"
           echo " V225 FINAL RELEASE"
-          echo " CI VALIDATION COMPLETED"
+          echo " ZIP MODE"
+          echo " VALIDATION COMPLETED"
           echo "=========================================="
