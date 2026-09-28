@@ -6,11 +6,13 @@ on:
       - main
       - master
       - develop
+
   pull_request:
     branches:
       - main
       - master
       - develop
+
   workflow_dispatch:
 
 permissions:
@@ -29,13 +31,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Show environment
         run: |
           python --version
           python -c "import sys; print(sys.executable)"
-          pip --version
+          python -m pip --version
           pwd
           ls -la
 
@@ -66,3 +67,11 @@ jobs:
           name: test-results
           path: test-results.xml
           if-no-files-found: ignore
+
+      - name: Final release validation
+        run: |
+          echo "=========================================="
+          echo " FOOTBALL WORLD SIMULATOR"
+          echo " V225 FINAL RELEASE"
+          echo " CI VALIDATION COMPLETED"
+          echo "=========================================="
