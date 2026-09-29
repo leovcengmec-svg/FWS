@@ -1,0 +1,206 @@
+name: FWS Core and Android Validation
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-engine:
+    name: V225 complete engine regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate V225 engine ZIP
+        id: engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(find . -maxdepth 3 -type f -name 'Football_World_Simulator_V225_BLOCK12_GITHUB_UPLOAD.zip' -print -quit)"
+          if [ -z "$ZIP" ]; then
+            echo 'Required V225 engine ZIP not found in repository.' >&2
+            exit 1
+          fi
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Engine package: $ZIP"
+
+      - name: Extract V225 engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fws-v225"
+          unzip -q "${{ steps.engine.outputs.zip }}" -d "$RUNNER_TEMP/fws-v225"
+          PYTEST_INI="$(find "$RUNNER_TEMP/fws-v225" -name pytest.ini -type f -print -quit)"
+          if [ -z "$PYTEST_INI" ]; then
+            echo 'pytest.ini not found in V225 package.' >&2
+            exit 1
+          fi
+          ENGINE_ROOT="$(dirname "$PYTEST_INI")"
+          echo "FWS_V225_ROOT=$ENGINE_ROOT" >> "$GITHUB_ENV"
+          echo "Engine root: $ENGINE_ROOT"
+          test -d "$ENGINE_ROOT/tests"
+
+      - name: Set up Python 3.11 for engine
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install engine test dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Compile V225 engine
+        working-directory: ${{ env.FWS_V225_ROOT }}
+        run: python -m compileall -q engine tests
+
+      - name: Run complete V225 regression suite
+        working-directory: ${{ env.FWS_V225_ROOT }}
+        run: python -m pytest -q
+
+  validate-android:
+    name: V226 Android integration and APK build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate V226 Android ZIP
+        id: android-package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(find . -maxdepth 3 -type f -name 'Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' -print -quit)"
+          if [ -z "$ZIP" ]; then
+            echo 'Required V226 Android ZIP not found in repository.' >&2
+            exit 1
+          fi
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Android package: $ZIP"
+
+      - name: Extract V226 Android package
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fws-v226"
+          unzip -q "${{ steps.android-package.outputs.zip }}" -d "$RUNNER_TEMP/fws-v226"
+          WORK="$RUNNER_TEMP/fws-v226"
+          if [ ! -f "$WORK/android/app/build.gradle" ]; then
+            FOUND="$(find "$WORK" -type f -path '*/android/app/build.gradle' -print -quit)"
+            test -n "$FOUND"
+            WORK="$(dirname "$(dirname "$(dirname "$(dirname "$FOUND")")")")"
+          fi
+          echo "FWS_V226_ROOT=$WORK" >> "$GITHUB_ENV"
+          echo "work=$WORK" >> "$GITHUB_OUTPUT"
+          test -f "$WORK/android/app/src/main/assets/global_world_catalog.json"
+          test -f "$WORK/tools/sync_verified_identity_assets.py"
+
+      - name: Set up Python 3.11 for Android tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python test dependencies
+        run: python -m pip install --upgrade pip pytest pillow cairosvg
+
+      - name: Validate bundled identity manifest
+        working-directory: ${{ steps.extract.outputs.work }}
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          assets = Path('android/app/src/main/assets')
+          identity = assets / 'identity'
+          catalog = json.loads((assets / 'global_world_catalog.json').read_text(encoding='utf-8'))
+          manifest = json.loads((identity / 'verified_assets.json').read_text(encoding='utf-8'))
+          assert len(catalog.get('associations', {})) == 211, 'Expected 211 associations'
+          assert isinstance(manifest.get('assets'), dict), 'Invalid identity manifest'
+          missing = [str(assets / p) for p in manifest['assets'].values() if not (assets / p).is_file()]
+          assert not missing, 'Missing manifest files: ' + ', '.join(missing[:20])
+          print(f'Validated {len(manifest["assets"])} manifest entries and 211 associations.')
+          PY
+
+      - name: Run Android adapter tests
+        working-directory: ${{ steps.extract.outputs.work }}/android
+        env:
+          PYTHONPATH: app/src/main/python
+        run: python -m pytest -q tests/
+
+      - name: Run image synchronizer unit tests (offline only)
+        working-directory: ${{ steps.extract.outputs.work }}
+        run: python -m pytest -q tests/test_identity_asset_sync.py
+
+      - name: Compile bundled Python engine and tools
+        working-directory: ${{ steps.extract.outputs.work }}
+        run: python -m compileall -q android/app/src/main/python tools tests
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configure runner-provided Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK_ROOT" ]; then
+            echo "Android SDK directory not found: $SDK_ROOT" >&2
+            echo "ANDROID_HOME=${ANDROID_HOME:-unset}" >&2
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}" >&2
+            exit 1
+          fi
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" \
+            "$SDK_ROOT/tools/bin/sdkmanager"; do
+            if [ -x "$candidate" ]; then SDKMANAGER="$candidate"; break; fi
+          done
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found under $SDK_ROOT/cmdline-tools" >&2
+            find "$SDK_ROOT" -maxdepth 5 -name sdkmanager -type f -print >&2 || true
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "Using SDK manager: $SDKMANAGER"
+          "$SDKMANAGER" --version
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        run: gradle -p "$FWS_V226_ROOT/android" --no-daemon assembleDebug
+
+      - name: Verify APK size is at most 25 MB
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find "$FWS_V226_ROOT/android/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
+          test -n "$APK"
+          SIZE="$(stat -c%s "$APK")"
+          echo "APK size: $SIZE bytes"
+          test "$SIZE" -le 26214400
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FWS-V226-debug-APK
+          path: ${{ env.FWS_V226_ROOT }}/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
