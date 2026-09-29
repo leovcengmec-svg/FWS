@@ -36,22 +36,16 @@ jobs:
         run: |
           echo "Procurando pacote V226..."
 
-          ZIP_FILE=$(find . -maxdepth 3 -type f \
-            -name "Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" \
-            | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 3 -type f -name 'Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERRO: ZIP V226 não encontrado."
-
             echo "Arquivos encontrados:"
             find . -maxdepth 3 -type f | sort
-
             exit 1
           fi
 
-          echo "ZIP encontrado:"
-          echo "$ZIP_FILE"
-
+          echo "ZIP encontrado: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
       - name: Extract V226 source
@@ -60,12 +54,268 @@ jobs:
           mkdir -p _fws_v226_source
 
           echo "Extraindo V226..."
-
           unzip -q "$ZIP_FILE" -d _fws_v226_source
 
           echo "Extração concluída."
 
       - name: Locate Python core
         run: |
-          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/_fws_v226_source" \
-            -name "pytest.ini
+          echo "Procurando pytest.ini..."
+
+          PYTEST_FILE=$(find "$GITHUB_WORKSPACE/_fws_v226_source" -type f -name 'pytest.ini' -print -quit)
+
+          if [ -z "$PYTEST_FILE" ]; then
+            echo "ERRO: pytest.ini não encontrado dentro do V226."
+            echo "Arquivos encontrados:"
+            find "$GITHUB_WORKSPACE/_fws_v226_source" -maxdepth 8 -type f | sort | head -300
+            exit 1
+          fi
+
+          PROJECT_ROOT="${PYTEST_FILE%/pytest.ini}"
+
+          echo "Arquivo pytest.ini:"
+          echo "$PYTEST_FILE"
+
+          echo "Raiz do núcleo Python:"
+          echo "$PROJECT_ROOT"
+
+          if [ ! -d "$PROJECT_ROOT/engine" ]; then
+            echo "ERRO: diretório engine não encontrado."
+            exit 1
+          fi
+
+          if [ ! -d "$PROJECT_ROOT/tests" ]; then
+            echo "ERRO: diretório tests não encontrado."
+            exit 1
+          fi
+
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+
+      - name: Compile engine and tests
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          python -m compileall engine tests
+
+      - name: Run V225 full regression
+        working-directory: ${{ env.PROJECT_ROOT }}
+        run: |
+          pytest -v --tb=short --junitxml=test-results.xml
+
+      - name: Upload V225 regression results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FWS-V225-Regression
+          path: ${{ env.PROJECT_ROOT }}/test-results.xml
+          if-no-files-found: ignore
+
+
+  # ============================================================
+  # ANDROID APK BUILD
+  # ============================================================
+  android-build:
+    name: Android APK Build
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ''
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Show Android environment
+        run: |
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "Java:"
+          java -version
+          echo "SDK Manager:"
+          sdkmanager --version
+
+      # ========================================================
+      # LOCALIZAR V226
+      # ========================================================
+      - name: Locate V226 ZIP
+        run: |
+          echo "Procurando V226..."
+
+          ZIP_FILE=$(find . -maxdepth 3 -type f -name 'Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' -print -quit)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERRO: ZIP V226 não encontrado."
+            echo "Estrutura do repositório:"
+            find . -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          echo "V226 encontrado: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      # ========================================================
+      # EXTRAIR V226
+      # ========================================================
+      - name: Extract V226 Android project
+        run: |
+          rm -rf _fws_v226_android
+          mkdir -p _fws_v226_android
+
+          echo "Extraindo V226..."
+          unzip -q "$ZIP_FILE" -d _fws_v226_android
+
+          echo "Extração concluída."
+
+          echo "Arquivos Android encontrados:"
+          find _fws_v226_android -maxdepth 6 -type f | sort | head -300
+
+      # ========================================================
+      # LOCALIZAR GRADLE
+      # ========================================================
+      - name: Locate Android project
+        run: |
+          echo "Procurando gradlew..."
+
+          GRADLE_FILE=$(find "$GITHUB_WORKSPACE/_fws_v226_android" -type f -name 'gradlew' -print -quit)
+
+          if [ -z "$GRADLE_FILE" ]; then
+            echo "ERRO: gradlew não encontrado dentro do V226."
+            echo ""
+            echo "Estrutura encontrada:"
+            find "$GITHUB_WORKSPACE/_fws_v226_android" -maxdepth 8 -type f | sort
+            exit 1
+          fi
+
+          ANDROID_ROOT="${GRADLE_FILE%/gradlew}"
+
+          echo "gradlew encontrado:"
+          echo "$GRADLE_FILE"
+
+          echo "Raiz Android:"
+          echo "$ANDROID_ROOT"
+
+          echo "ANDROID_ROOT=$ANDROID_ROOT" >> "$GITHUB_ENV"
+
+      # ========================================================
+      # GRADLE WRAPPER
+      # ========================================================
+      - name: Verify Gradle wrapper
+        working-directory: ${{ env.ANDROID_ROOT }}
+        run: |
+          if [ ! -f gradlew ]; then
+            echo "ERRO: gradlew não existe."
+            exit 1
+          fi
+
+          chmod +x gradlew
+
+          echo "Gradle wrapper encontrado:"
+          ls -lh gradlew
+
+          echo ""
+          echo "Versão do Gradle:"
+          ./gradlew --version
+
+      # ========================================================
+      # CLEAN
+      # ========================================================
+      - name: Clean Android project
+        working-directory: ${{ env.ANDROID_ROOT }}
+        run: |
+          ./gradlew clean --no-daemon
+
+      # ========================================================
+      # BUILD APK
+      # ========================================================
+      - name: Build Debug APK
+        working-directory: ${{ env.ANDROID_ROOT }}
+        run: |
+          ./gradlew assembleDebug --no-daemon
+
+      # ========================================================
+      # VALIDAR APK
+      # ========================================================
+      - name: Verify APK
+        working-directory: ${{ env.ANDROID_ROOT }}
+        run: |
+          echo "Procurando APK..."
+
+          find . -type f -name '*.apk' -print
+
+          APK_COUNT=$(find . -type f -name '*.apk' | wc -l)
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERRO: nenhum APK foi gerado."
+            exit 1
+          fi
+
+          echo ""
+          echo "APK gerado com sucesso."
+          echo "Quantidade: $APK_COUNT"
+
+      # ========================================================
+      # UPLOAD APK
+      # ========================================================
+      - name: Upload V226 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FWS-V226-Android-Debug
+          path: |
+            _fws_v226_android/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+
+  # ============================================================
+  # FINAL VALIDATION
+  # ============================================================
+  final-validation:
+    name: V226 Final Validation
+
+    needs:
+      - validate-v225
+      - android-build
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Final V226 release gate
+        run: |
+          echo "=========================================="
+          echo " FOOTBALL WORLD SIMULATOR"
+          echo " V226 ANDROID FOUNDATION"
+          echo "=========================================="
+          echo ""
+          echo "V225 CORE REGRESSION: OK"
+          echo "ANDROID SDK: OK"
+          echo "JAVA 17: OK"
+          echo "GRADLE WRAPPER: OK"
+          echo "ANDROID BUILD: OK"
+          echo "APK: GENERATED"
+          echo ""
+          echo "V226 VALIDATION COMPLETED"
+          echo "=========================================="
