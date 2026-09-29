@@ -1,0 +1,93 @@
+name: FWS Artwork Sync (separate from validation)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-artwork:
+    name: Search a small artwork batch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate and extract V226 package
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(find . -maxdepth 3 -type f -name 'Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' -print -quit)"
+          test -n "$ZIP"
+          mkdir -p "$RUNNER_TEMP/fws-v226"
+          unzip -q "$ZIP" -d "$RUNNER_TEMP/fws-v226"
+          WORK="$RUNNER_TEMP/fws-v226"
+          if [ ! -f "$WORK/tools/sync_verified_identity_assets.py" ]; then
+            FOUND="$(find "$WORK" -type f -path '*/tools/sync_verified_identity_assets.py' -print -quit)"
+            test -n "$FOUND"
+            WORK="$(dirname "$(dirname "$FOUND")")"
+          fi
+          echo "FWS_WORK=$WORK" >> "$GITHUB_ENV"
+          echo "work=$WORK" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install image dependencies
+        run: python -m pip install --upgrade pip pillow cairosvg
+
+      - name: Restore artwork cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ steps.extract.outputs.work }}/.cache/wikimedia_api
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_clubs
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_national_teams
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_leagues
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_competitions
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_confederations
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/verified_assets.json
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/asset_sources.json
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/ATTRIBUTION_REAL_ASSETS.md
+          key: fws-artwork-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fws-artwork-${{ runner.os }}-
+
+      - name: Search only a small batch and stop safely on rate limits
+        working-directory: ${{ steps.extract.outputs.work }}
+        env:
+          FWS_WIKIMEDIA_MIN_INTERVAL: '5.0'
+        run: python tools/sync_verified_identity_assets.py --max-searches 25 --delay 5.0
+
+      - name: Save artwork cache for the next batch
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ steps.extract.outputs.work }}/.cache/wikimedia_api
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_clubs
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_national_teams
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_leagues
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_competitions
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_confederations
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/verified_assets.json
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/asset_sources.json
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/ATTRIBUTION_REAL_ASSETS.md
+          key: fws-artwork-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload artwork results for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: FWS-artwork-batch-${{ github.run_id }}
+          path: |
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/verified_assets.json
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/asset_sources.json
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/ATTRIBUTION_REAL_ASSETS.md
+            ${{ steps.extract.outputs.work }}/android/app/src/main/assets/identity/real_*/**
+          if-no-files-found: warn
+          retention-days: 14
