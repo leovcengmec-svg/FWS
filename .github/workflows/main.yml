@@ -32,174 +32,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate FWS ZIP
+      - name: Locate V226 ZIP
         run: |
+          echo "Procurando pacote V226..."
+
           ZIP_FILE=$(find . -maxdepth 3 -type f \
-            \( -name "Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" \
-            -o -name "Football_World_Simulator_V225_BLOCK12_GITHUB_UPLOAD.zip" \
-            -o -name "Football_World_Simulator_V225_BLOCK12.zip" \
-            \) | head -n 1)
+            -name "Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERRO: ZIP FWS não encontrado."
+            echo "ERRO: ZIP V226 não encontrado."
+
+            echo "Arquivos encontrados:"
             find . -maxdepth 3 -type f | sort
+
             exit 1
           fi
 
-          echo "ZIP encontrado: $ZIP_FILE"
+          echo "ZIP encontrado:"
+          echo "$ZIP_FILE"
+
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract FWS source
+      - name: Extract V226 source
         run: |
-          rm -rf _fws_source
-          mkdir -p _fws_source
-          unzip -q "$ZIP_FILE" -d _fws_source
+          rm -rf _fws_v226_source
+          mkdir -p _fws_v226_source
+
+          echo "Extraindo V226..."
+
+          unzip -q "$ZIP_FILE" -d _fws_v226_source
+
+          echo "Extração concluída."
 
       - name: Locate Python core
         run: |
-          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/_fws_source" \
-            -name "pytest.ini" \
-            -type f \
-            -print -quit \
-            | xargs dirname)
-
-          if [ -z "$PROJECT_ROOT" ] || [ ! -f "$PROJECT_ROOT/pytest.ini" ]; then
-            echo "ERRO: núcleo V225 não encontrado."
-            exit 1
-          fi
-
-          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install pytest
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest
-
-      - name: Compile engine and tests
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          python -m compileall engine tests
-
-      - name: Run full V225 regression
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          pytest -v --tb=short --junitxml=test-results.xml
-
-      - name: Upload regression results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: FWS-V225-Regression
-          path: ${{ env.PROJECT_ROOT }}/test-results.xml
-          if-no-files-found: ignore
-
-
-  # ============================================================
-  # ANDROID BUILD
-  # ============================================================
-  android-build:
-    name: Android APK Build
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # ========================================================
-      # CORREÇÃO PRINCIPAL:
-      # V4 + sem instalação automática de pacotes antigos
-      # ========================================================
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: ''
-
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Show Android environment
-        run: |
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          java -version
-          sdkmanager --version
-
-      - name: Verify Gradle wrapper
-        run: |
-          test -f gradlew
-          chmod +x gradlew
-          ./gradlew --version
-
-      - name: Clean project
-        run: |
-          ./gradlew clean --no-daemon
-
-      - name: Build Debug APK
-        run: |
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Verify APK
-        run: |
-          echo "APKs encontrados:"
-          find . -type f -name "*.apk" -print
-
-          APK_COUNT=$(find . -type f -name "*.apk" | wc -l)
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERRO: APK não foi gerado."
-            exit 1
-          fi
-
-          echo "APK gerado com sucesso."
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FWS-V226-Android-Debug
-          path: |
-            **/build/outputs/apk/**/*.apk
-          if-no-files-found: error
-
-
-  # ============================================================
-  # FINAL GATE
-  # ============================================================
-  final-validation:
-    name: V226 Final Validation
-    needs:
-      - validate-v225
-      - android-build
-
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Final V226 validation
-        run: |
-          echo "=========================================="
-          echo " FOOTBALL WORLD SIMULATOR"
-          echo " V226 ANDROID FOUNDATION"
-          echo "=========================================="
-          echo ""
-          echo "V225 CORE: OK"
-          echo "ANDROID SDK: OK"
-          echo "GRADLE: OK"
-          echo "APK: OK"
-          echo ""
-          echo "V226 VALIDATION COMPLETED"
-          echo "=========================================="
+          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/_fws_v226_source" \
+            -name "pytest.ini
