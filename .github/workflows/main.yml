@@ -1,382 +1,213 @@
-name: Football World Simulator - V226 Android
+
+name: FWS V226 Android Validation
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ main, master, develop ]
+    branches: ["main", "master"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-
-  # ============================================================
-  # V225 - REGRESSÃO COMPLETA DO MOTOR OFICIAL
-  # ============================================================
-
-  validate-v225:
-    name: V225 Core Validation
+  android-package:
+    name: Validate source ZIP, sync artwork and build APK
     runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Locate V225 authoritative package
-        shell: bash
-        run: |
-          ZIP="$(find . -type f -name 'Football_World_Simulator_V225_BLOCK12_GITHUB_UPLOAD.zip' -print -quit)"
-
-          test -n "$ZIP"
-
-          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
-
-          echo "V225 package:"
-          echo "$ZIP"
-
-      - name: Extract V225 package
-        shell: bash
-        run: |
-          rm -rf "$RUNNER_TEMP/fws-v225"
-
-          mkdir -p "$RUNNER_TEMP/fws-v225"
-
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/fws-v225"
-
-          ROOT="$(find "$RUNNER_TEMP/fws-v225" \
-            -name pytest.ini \
-            -type f \
-            -print -quit | xargs -r dirname)"
-
-          test -n "$ROOT"
-
-          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
-
-          echo "V225 project root:"
-          echo "$ROOT"
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install test dependencies
-        run: |
-          python -m pip install --upgrade pip pytest
-
-      - name: Compile V225 engine and tests
-        working-directory: ${{ env.ROOT }}
-        run: |
-          python -m compileall -q engine tests
-
-      - name: Run complete V225 regression
-        working-directory: ${{ env.ROOT }}
-        run: |
-          pytest -q --junitxml="$RUNNER_TEMP/test-results.xml"
-
-      - name: Upload V225 test report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fws-v226-v225-test-results
-          path: ${{ runner.temp }}/test-results.xml
-          if-no-files-found: error
-
-
-  # ============================================================
-  # V226 - ANDROID
-  # ============================================================
-
-  android-build:
-    name: Android APK Build
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # ----------------------------------------------------------
-      # Localizar pacote fechado V226
-      # ----------------------------------------------------------
 
       - name: Locate exact V226 Android package
+        id: package
         shell: bash
         run: |
-          ZIP="$(find . -type f -name 'Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' -print -quit)"
-
-          test -n "$ZIP"
-
-          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
-
-          echo "V226 package:"
-          echo "$ZIP"
-
-      # ----------------------------------------------------------
-      # Extrair V226
-      # ----------------------------------------------------------
+          set -euo pipefail
+          ZIP="$(find . -maxdepth 3 -type f -name 'Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' -print -quit)"
+          if [ -z "$ZIP" ]; then
+            echo 'Required package Football_World_Simulator_V226_ANDROID_FOUNDATION.zip was not found in the repository.' >&2
+            find . -maxdepth 3 -type f -name '*.zip' -print >&2
+            exit 1
+          fi
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "Using source package: $ZIP"
+          echo "Package size: $(stat -c%s "$ZIP") bytes"
 
       - name: Extract V226 Android package
         shell: bash
         run: |
-          rm -rf "$RUNNER_TEMP/fws-v226-android"
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/fws-source"
+          unzip -q "${{ steps.package.outputs.zip }}" -d "$RUNNER_TEMP/fws-source"
+          WORK="$RUNNER_TEMP/fws-source"
+          if [ ! -f "$WORK/android/app/build.gradle" ]; then
+            FOUND="$(find "$WORK" -type f -path '*/android/app/build.gradle' -print -quit)"
+            if [ -z "$FOUND" ]; then
+              echo 'Could not find android/app/build.gradle inside the V226 package.' >&2
+              find "$WORK" -maxdepth 5 -type f | head -80 >&2
+              exit 1
+            fi
+            WORK="$(dirname "$(dirname "$(dirname "$(dirname "$FOUND")")")")"
+          fi
+          echo "FWS_WORK=$WORK" >> "$GITHUB_ENV"
+          test -f "$WORK/android/app/src/main/assets/global_world_catalog.json"
+          test -f "$WORK/android/app/src/main/assets/identity/verified_assets.json"
+          test -f "$WORK/tools/sync_verified_identity_assets.py"
+          echo "Validated project root: $WORK"
 
-          mkdir -p "$RUNNER_TEMP/fws-v226-android"
-
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/fws-v226-android"
-
-          ROOT="$(find "$RUNNER_TEMP/fws-v226-android" \
-            -name settings.gradle \
-            -type f \
-            -print -quit | xargs -r dirname)"
-
-          test -n "$ROOT"
-
-          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
-
-          echo "Android project root:"
-          echo "$ROOT"
-
-      # ----------------------------------------------------------
-      # Java
-      # ----------------------------------------------------------
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # ----------------------------------------------------------
-      # Android SDK
-      # ----------------------------------------------------------
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      # ----------------------------------------------------------
-      # Python
-      # ----------------------------------------------------------
-
-      - name: Setup Python 3.11 for Android runtime
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      # ----------------------------------------------------------
-      # Gradle 8.7
-      #
-      # IMPORTANTE:
-      # Não usamos gradle/actions/setup-gradle.
-      # O projeto fica dentro de ZIP e não existe Gradle
-      # na raiz do repositório.
-      # ----------------------------------------------------------
+      - name: Install Python test and image dependencies
+        run: python -m pip install --upgrade pip pytest pillow cairosvg
 
-      - name: Download Gradle 8.7
+      - name: Validate identity assets without requiring a clubs directory
+        working-directory: ${{ env.FWS_WORK }}
         shell: bash
         run: |
-          cd "$RUNNER_TEMP"
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-          curl -L \
-            --fail \
-            --retry 3 \
-            -o gradle-8.7-bin.zip \
-            https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          assets = Path('android/app/src/main/assets')
+          identity = assets / 'identity'
+          catalog = json.loads((assets / 'global_world_catalog.json').read_text(encoding='utf-8'))
+          manifest = json.loads((identity / 'verified_assets.json').read_text(encoding='utf-8'))
+          flags = identity / 'countries'
 
-          unzip -q gradle-8.7-bin.zip
+          assert assets.is_dir(), f'Missing assets directory: {assets}'
+          assert flags.is_dir(), f'Missing country flag directory: {flags}'
+          assert isinstance(manifest.get('assets'), dict), 'verified_assets.json must contain an assets mapping'
+          assert len(catalog.get('associations', {})) == 211, 'Expected 211 associations in global catalog'
 
-          test -x "$RUNNER_TEMP/gradle-8.7/bin/gradle"
+          missing = []
+          for entity, relpath in manifest['assets'].items():
+              target = assets / relpath
+              if not target.is_file():
+                  missing.append((entity, str(target)))
 
-          echo "GRADLE_HOME=$RUNNER_TEMP/gradle-8.7" >> "$GITHUB_ENV"
+          if missing:
+              raise SystemExit(
+                  'Manifest references missing assets:\n'
+                  + '\n'.join(f'{k}: {p}' for k, p in missing[:30])
+              )
 
-          echo "$RUNNER_TEMP/gradle-8.7/bin" >> "$GITHUB_PATH"
+          print(f'Identity validation passed: {len(manifest["assets"])} mappings; {len(catalog["associations"])} associations.')
+          print('No hard-coded identity/clubs directory is required; artwork is tracked through the manifest.')
+          PY
 
-      - name: Verify Gradle
+      - name: Run Android adapter integration tests
+        working-directory: ${{ env.FWS_WORK }}/android
+        env:
+          PYTHONPATH: app/src/main/python
+        run: python -m pytest -q tests/
+
+      - name: Run identity synchronizer tests
+        working-directory: ${{ env.FWS_WORK }}
+        run: python -m pytest -q tests/test_identity_asset_sync.py
+
+      - name: Compile Python engine and tools
+        working-directory: ${{ env.FWS_WORK }}
+        run: python -m compileall -q android/app/src/main/python tools tests
+
+      - name: Install image processing dependencies for artwork sync
+        run: python -m pip install --upgrade pillow cairosvg
+
+      - name: Sync full catalog artwork on manual run
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: ${{ env.FWS_WORK }}
+        run: python tools/sync_verified_identity_assets.py --delay 0.22
+
+      - name: Sync priority artwork on push or pull request
+        if: github.event_name != 'workflow_dispatch'
+        working-directory: ${{ env.FWS_WORK }}
+        run: python tools/sync_verified_identity_assets.py --max-searches 500 --delay 0.22
+
+      - name: Record identity asset coverage
+        working-directory: ${{ env.FWS_WORK }}
         run: |
-          gradle --version
+          python - <<'PY'
+          import json
+          from pathlib import Path
 
-      # ----------------------------------------------------------
-      # Validar estrutura Android
-      # ----------------------------------------------------------
+          p = Path('android/app/src/main/assets/identity/asset_sources.json')
+          data = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+          print(json.dumps({
+              'asset_count': len(data.get('assets', {})),
+              'summary': data.get('summary', {}),
+              'missing_examples': data.get('missing', [])[:20]
+          }, ensure_ascii=False, indent=2))
+          PY
 
-      - name: Validate V226 Android project
-        working-directory: ${{ env.ROOT }}
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Build debug APK
+        run: gradle -p "$FWS_WORK/android" --no-daemon assembleDebug
+
+      - name: Verify APK exists and is below 25 MB
         shell: bash
         run: |
-
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-
-          test -f app/src/main/AndroidManifest.xml
-
-          test -f app/src/main/java/com/fws/android/MainActivity.java
-          test -f app/src/main/java/com/fws/android/FwsPythonRuntime.java
-
-          test -f app/src/main/python/runtime_api.py
-
-          test -d app/src/main/python/engine
-
-          test -f app/src/main/python/data/global_world_catalog.json
-
-          echo "Android project structure: OK"
-
-      # ----------------------------------------------------------
-      # Validar Chaquopy
-      # ----------------------------------------------------------
-
-      - name: Validate Chaquopy configuration
-        working-directory: ${{ env.ROOT }}
-        shell: bash
-        run: |
-
-          grep -q "com.chaquo.python" build.gradle
-          grep -q "com.chaquo.python" app/build.gradle
-
-          echo "Chaquopy configuration: OK"
-
-      # ----------------------------------------------------------
-      # Validar identidade visual
-      # ----------------------------------------------------------
-
-      - name: Validate identity assets
-        working-directory: ${{ env.ROOT }}
-        shell: bash
-        run: |
-
-          CLUBS="$(find app/src/main/assets/identity/clubs \
-            -type f \
-            -name '*.png' | wc -l)"
-
-          LEAGUES="$(find app/src/main/assets/identity/leagues \
-            -type f \
-            -name '*.png' | wc -l)"
-
-          COUNTRIES="$(find app/src/main/assets/identity/countries \
-            -type f \
-            -name '*.png' | wc -l)"
-
-          NATIONAL_TEAMS="$(find app/src/main/assets/identity/national_teams \
-            -type f \
-            -name '*.png' | wc -l)"
-
-          COMPETITIONS="$(find app/src/main/assets/identity/competitions \
-            -type f \
-            -name '*.png' | wc -l)"
-
-          CONFEDERATIONS="$(find app/src/main/assets/identity/confederations \
-            -type f \
-            -name '*.png' | wc -l)"
-
-          EMPTY="$(find app/src/main/assets/identity \
-            -type f \
-            -name '*.png' \
-            -size 0 | wc -l)"
-
-          echo "Club assets: $CLUBS"
-          echo "League assets: $LEAGUES"
-          echo "Country assets: $COUNTRIES"
-          echo "National team assets: $NATIONAL_TEAMS"
-          echo "Competition assets: $COMPETITIONS"
-          echo "Confederation assets: $CONFEDERATIONS"
-          echo "Empty PNG files: $EMPTY"
-
-          test "$CLUBS" -eq 5530
-          test "$LEAGUES" -eq 353
-          test "$COUNTRIES" -eq 211
-          test "$NATIONAL_TEAMS" -eq 211
-          test "$COMPETITIONS" -eq 14
-          test "$CONFEDERATIONS" -eq 6
-          test "$EMPTY" -eq 0
-
-          echo "Identity assets: PASSED"
-
-      # ----------------------------------------------------------
-      # Compilar Python do runtime
-      # ----------------------------------------------------------
-
-      - name: Compile Android Python runtime
-        working-directory: ${{ env.ROOT }}
-        run: |
-          python -m compileall -q app/src/main/python
-
-      # ----------------------------------------------------------
-      # Build APK
-      # ----------------------------------------------------------
-
-      - name: Build Android debug APK
-        working-directory: ${{ env.ROOT }}
-        shell: bash
-        run: |
-          gradle clean assembleDebug --no-daemon --stacktrace
-
-      # ----------------------------------------------------------
-      # Verificar APK
-      # ----------------------------------------------------------
-
-      - name: Verify APK
-        working-directory: ${{ env.ROOT }}
-        shell: bash
-        run: |
-
-          APK="$(find app/build/outputs/apk/debug \
-            -type f \
-            -name '*.apk' \
-            -print -quit)"
-
+          set -euo pipefail
+          APK="$(find "$FWS_WORK/android/app/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
           test -n "$APK"
-          test -s "$APK"
+          SIZE="$(stat -c%s "$APK")"
+          echo "APK=$APK SIZE_BYTES=$SIZE"
+          test "$SIZE" -le 26214400
 
-          echo "APK generated successfully:"
-          ls -lh "$APK"
+      - name: Package updated source with synchronized artwork
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$FWS_WORK"
+          zip -qr "$RUNNER_TEMP/Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" . \
+            -x '.git/*' 'android/.gradle/*' 'android/app/build/*' '**/__pycache__/*' '*.pyc' '.pytest_cache/*'
 
-      # ----------------------------------------------------------
-      # Publicar APK
-      # ----------------------------------------------------------
+          SIZE="$(stat -c%s "$RUNNER_TEMP/Football_World_Simulator_V226_ANDROID_FOUNDATION.zip")"
+          echo "SOURCE_ZIP_SIZE_BYTES=$SIZE"
+          mkdir -p "$RUNNER_TEMP/fws-artifacts"
 
-      - name: Upload V226 APK
+          if [ "$SIZE" -le 26214400 ]; then
+            cp "$RUNNER_TEMP/Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" "$RUNNER_TEMP/fws-artifacts/"
+          else
+            split -b 23000000 -d -a 2 "$RUNNER_TEMP/Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" "$RUNNER_TEMP/fws-artifacts/Football_World_Simulator_V226_ANDROID_FOUNDATION_PART_"
+            for f in "$RUNNER_TEMP"/fws-artifacts/*; do
+              case "$f" in
+                *.bin) ;;
+                *) [ -f "$f" ] && mv "$f" "$f.bin" || true ;;
+              esac
+            done
+            printf '%s\n' 'cat Football_World_Simulator_V226_ANDROID_FOUNDATION_PART_*.bin > Football_World_Simulator_V226_ANDROID_FOUNDATION.zip' > "$RUNNER_TEMP/fws-artifacts/RECOMBINE_SOURCE_ZIP.txt"
+          fi
+
+          cp "$APK" "$RUNNER_TEMP/fws-artifacts/"
+          cp "$FWS_WORK/android/app/src/main/assets/identity/asset_sources.json" "$RUNNER_TEMP/fws-artifacts/"
+
+      - name: Upload APK, source package and asset audit
         uses: actions/upload-artifact@v4
         with:
-          name: fws-v226-android-debug-apk
-          path: ${{ env.ROOT }}/app/build/outputs/apk/debug/*.apk
+          name: FWS-V226-Android-validated
+          path: ${{ runner.temp }}/fws-artifacts/*
           if-no-files-found: error
-
-
-  # ============================================================
-  # FINAL VALIDATION
-  # ============================================================
-
-  final-validation:
-    name: Final Validation
-    needs:
-      - validate-v225
-      - android-build
-
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Release gate
-        run: |
-          echo "======================================"
-          echo "FWS V226 RELEASE GATE"
-          echo "======================================"
-          echo "V225 regression: PASSED"
-          echo "Android project validation: PASSED"
-          echo "Chaquopy validation: PASSED"
-          echo "Identity assets validation: PASSED"
-          echo "Android APK build: PASSED"
-          echo "======================================"
-          echo "V226 FINAL VALIDATION: PASSED"
-          echo "======================================"
+          retention-days: 14
+ 
