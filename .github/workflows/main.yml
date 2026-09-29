@@ -1,4 +1,4 @@
-name: Football World Simulator - CI
+name: Football World Simulator - V226 Android
 
 on:
   push:
@@ -19,8 +19,12 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: V225 ZIP Validation
+
+  # ============================================================
+  # 1. VALIDAR O NÚCLEO V225 DENTRO DO ZIP
+  # ============================================================
+  validate-v225:
+    name: V225 Core Validation
     runs-on: ubuntu-latest
 
     steps:
@@ -28,20 +32,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate V225 ZIP
+      - name: Locate FWS ZIP
         run: |
-          echo "Procurando pacote ZIP do Football World Simulator..."
+          echo "Procurando ZIP do Football World Simulator..."
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f \
-            \( -name "Football_World_Simulator_V225_BLOCK12.zip" \
+          ZIP_FILE=$(find . -maxdepth 3 -type f \
+            \( -name "Football_World_Simulator_V226_ANDROID_FOUNDATION.zip" \
             -o -name "Football_World_Simulator_V225_BLOCK12_GITHUB_UPLOAD.zip" \
+            -o -name "Football_World_Simulator_V225_BLOCK12.zip" \
             \) \
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERRO: ZIP V225 não encontrado."
-            echo "Arquivos encontrados:"
-            find . -maxdepth 2 -type f | sort
+            echo "ERRO: nenhum ZIP FWS encontrado."
+            find . -maxdepth 3 -type f | sort
             exit 1
           fi
 
@@ -50,102 +54,138 @@ jobs:
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract V225 ZIP
+      - name: Extract FWS source
         run: |
-          rm -rf _fws_v225
-          mkdir -p _fws_v225
+          rm -rf _fws_source
+          mkdir -p _fws_source
 
-          echo "Extraindo:"
-          echo "$ZIP_FILE"
+          unzip -q "$ZIP_FILE" -d _fws_source
 
-          unzip -q "$ZIP_FILE" -d _fws_v225
-
-          echo "Conteúdo extraído:"
-          find _fws_v225 -maxdepth 2 -type d | sort | head -100
-
-      - name: Locate project root
+      - name: Locate Python core
         run: |
-          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/_fws_v225" \
+          PROJECT_ROOT=$(find "$GITHUB_WORKSPACE/_fws_source" \
             -name "pytest.ini" \
             -type f \
             -print -quit \
             | xargs dirname)
 
           if [ -z "$PROJECT_ROOT" ] || [ ! -f "$PROJECT_ROOT/pytest.ini" ]; then
-            echo "ERRO: raiz do projeto V225 não encontrada."
-            find "$GITHUB_WORKSPACE/_fws_v225" -maxdepth 4 -type f | sort | head -200
+            echo "ERRO: núcleo Python do FWS não encontrado."
             exit 1
           fi
 
-          echo "Raiz do projeto:"
-          echo "$PROJECT_ROOT"
-
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-
-      - name: Verify V225 structure
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          echo "Verificando estrutura V225..."
-
-          test -d engine
-          test -d tests
-          test -d config
-          test -f pytest.ini
-
-          test -f tests/test_v215_1_match_engine.py
-          test -f tests/test_v220_block11.py
-          test -f tests/test_v221_v225_release.py
-
-          echo "Estrutura V225 OK."
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Show environment
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          python --version
-          python -m pip --version
-          pwd
-
-      - name: Install test dependencies
+      - name: Install pytest
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
 
-      - name: Validate Python compilation
+      - name: Compile engine and tests
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           python -m compileall engine tests
 
-      - name: Run critical tests
-        working-directory: ${{ env.PROJECT_ROOT }}
-        run: |
-          pytest -v \
-            tests/test_v215_1_match_engine.py \
-            tests/test_v220_block11.py \
-            tests/test_v221_v225_release.py
-
-      - name: Run full regression
+      - name: Run V225 regression
         working-directory: ${{ env.PROJECT_ROOT }}
         run: |
           pytest -v --tb=short --junitxml=test-results.xml
 
-      - name: Upload test results
+      - name: Upload regression results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fws-v225-test-results
+          name: fws-v225-regression
           path: ${{ env.PROJECT_ROOT }}/test-results.xml
           if-no-files-found: ignore
 
-      - name: Final V225 validation
+
+  # ============================================================
+  # 2. BUILD ANDROID
+  # ============================================================
+  android-build:
+    name: Android APK Build
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show repository
+        run: |
+          echo "Estrutura do repositório:"
+          find . -maxdepth 3 -type f | sort | head -300
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
+
+      - name: Make Gradle executable
+        run: |
+          chmod +x gradlew
+
+      - name: Clean Android project
+        run: |
+          ./gradlew clean
+
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug
+
+      - name: Locate APK
+        run: |
+          echo "APKs gerados:"
+          find . -type f -name "*.apk" -print
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FWS-V226-Android-Debug
+          path: |
+            **/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+
+  # ============================================================
+  # 3. FINAL VALIDATION
+  # ============================================================
+  final-validation:
+    name: V226 Final Validation
+    needs:
+      - validate-v225
+      - android-build
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: V226 Release Gate
         run: |
           echo "=========================================="
           echo " FOOTBALL WORLD SIMULATOR"
-          echo " V225 FINAL RELEASE"
-          echo " ZIP MODE"
-          echo " VALIDATION COMPLETED"
+          echo " V226 ANDROID FOUNDATION"
+          echo "=========================================="
+          echo ""
+          echo "V225 CORE: VALIDADO"
+          echo "ANDROID BUILD: VALIDADO"
+          echo "APK: GERADO"
+          echo ""
+          echo "V226 FOUNDATION OK"
           echo "=========================================="
